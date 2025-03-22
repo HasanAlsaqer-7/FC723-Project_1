@@ -5,8 +5,8 @@ seats = {f"{row}{col}": "F" for row in range(1, 81) for col in "ABCDEF"}
 # Define storage area seats (these seats cannot be booked)
 storage_seats = {"77D", "77E", "77F", "78D", "78E", "78F"}
 
-# Example booked seats (this can change as users book or cancel seats)
-booked_seats = {"1A", "5B", "10C", "15D", "20E", "25F"}
+#Storage for booked seats.
+booked_seats = {""}
 
 
 def display_menu():
