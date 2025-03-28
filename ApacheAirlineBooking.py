@@ -24,22 +24,16 @@ seats = {f"{row}{col}": "F" for row in range(1, 81) for col in "ABCDEF"}
 # Define storage area seats
 storage_seats = {"77D", "77E", "77F", "78D", "78E", "78F"}
 
-# Dictionary to store booked seats along with their booking references
-booked_seats = {}
-
-# Global set to keep track of all generated booking references.
-existing_refs = set()
 
 def generate_booking_reference():
-    """
-    Generate a unique 8-character alphanumeric booking reference.
-    """
-    while True:
-        ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        if ref not in existing_refs:
-            existing_refs.add(ref)
-            return ref
+    while True:  # Keep generating until A Unique reference is  found
+        booking_ref = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))  
 
+        # Check if this booking reference already exists in the database
+        cursor.execute("SELECT COUNT(*) FROM bookings WHERE booking_ref = ?", (booking_ref,))
+        if cursor.fetchone()[0] == 0:
+            return booking_ref  # It's unique, so it is returned
+        
 def display_menu():
     print("\n--- Apache Airlines Seat Booking ---")
     print("1. Check availability of seat")
@@ -72,14 +66,13 @@ def book_seat():
     if seat in seats and seat not in storage_seats:
         cursor.execute("SELECT * FROM bookings WHERE seat = ?", (seat,))
         if cursor.fetchone() is None:
-            passport_no = input("Enter passport number: ")
-            first_name = input("Enter first name: ")
-            last_name = input("Enter last name: ")
+            passport_no = input("Enter passport number: ").upper()
+            first_name = input("Enter first name: ").capitalize()
+            last_name = input("Enter last name: ").capitalize()
             booking_ref = generate_booking_reference()
             cursor.execute("INSERT INTO bookings (booking_ref, passport_no, first_name, last_name, seat) VALUES (?, ?, ?, ?, ?)",
                            (booking_ref, passport_no, first_name, last_name, seat))
             conn.commit()
-            booked_seats[seat] = booking_ref
             print(f"Seat {seat} successfully booked with reference {booking_ref}.")
         else:
             print("Seat is already booked.")
@@ -88,55 +81,111 @@ def book_seat():
 
 #Function that prompts the user to choose a seat and free it, removing the booking reference and database entry
 def free_seat():
+    # Prompt user for details to identify the booking
     seat = input("Enter seat number to free (e.g., 1A): ").upper()
-    cursor.execute("DELETE FROM bookings WHERE seat = ?", (seat,))
+    last_name_input = input("Enter your last name: ").strip().capitalize()
+    booking_ref_input = input("Enter your booking reference: ").strip().upper()
+
+    # Check if the booking exists in the database with the given seat, last name, and booking reference
+    cursor.execute("SELECT COUNT(*) FROM bookings WHERE seat = ? AND last_name = ? AND booking_ref = ?",
+                   (seat, last_name_input, booking_ref_input))
+    if cursor.fetchone()[0] == 0:
+        print("No matching booking found. Cannot free the seat.")
+        return
+
+    # Delete the booking from the database
+    cursor.execute("DELETE FROM bookings WHERE seat = ? AND last_name = ? AND booking_ref = ?",
+                   (seat, last_name_input, booking_ref_input))
     conn.commit()
-    if seat in booked_seats:
-        del booked_seats[seat]
-        print(f"Seat {seat} is now free.")
-    else:
-        print("Seat is not booked or does not exist.")
+    print(f"Seat {seat} has been freed successfully.")
+
+
+
 
 #Function that prompts the user to modify a booking by freeing the current seat and booking a new one, also changing the database entry of the booking
 def modify_booking():
+    #prompt user for current booking details to identify the booking to modify
     current_seat = input("Enter your currently booked seat (e.g., 1A): ").upper()
-    cursor.execute("SELECT * FROM bookings WHERE seat = ?", (current_seat,))
+    last_name_input = input("Enter your last name: ").strip().capitalize()
+    booking_ref_input = input("Enter your current booking reference: ").strip().upper()
+
+    # Verify the current booking exists in the database
+    cursor.execute("SELECT * FROM bookings WHERE seat = ? AND last_name = ? AND booking_ref = ?",
+                   (current_seat, last_name_input, booking_ref_input))
     booking_data = cursor.fetchone()
     if not booking_data:
-        print("The specified current seat is not booked.")
+        print("No matching booking found for the current seat. Cannot modify booking.")
         return
+
+    # ask for the new seat to change the booking
     new_seat = input("Enter the new seat you want to book (e.g., 1B): ").upper()
-    cursor.execute("SELECT * FROM bookings WHERE seat = ?", (new_seat,))
-    if cursor.fetchone():
+    # Check if the new seat is available and valid 
+    cursor.execute("SELECT COUNT(*) FROM bookings WHERE seat = ?", (new_seat,))
+    if cursor.fetchone()[0] > 0:
         print("The new seat is already booked.")
         return
-    cursor.execute("DELETE FROM bookings WHERE seat = ?", (current_seat,))
+    if new_seat in storage_seats:
+        print("The new seat is in a storage area and cannot be booked.")
+        return
+
+    # Delete the old booking record
+    cursor.execute("DELETE FROM bookings WHERE seat = ? AND last_name = ? AND booking_ref = ?",
+                   (current_seat, last_name_input, booking_ref_input))
     conn.commit()
-    booking_ref = generate_booking_reference()
+    
+    # Generate a new booking reference for the new seat
+    new_booking_ref = generate_booking_reference()
+    
+    # Insert the updated booking record with the old details
     cursor.execute("INSERT INTO bookings (booking_ref, passport_no, first_name, last_name, seat) VALUES (?, ?, ?, ?, ?)",
-                   (booking_ref, booking_data[1], booking_data[2], booking_data[3], new_seat))
+                   (new_booking_ref, booking_data[1], booking_data[2], booking_data[3], new_seat))
     conn.commit()
-    booked_seats[new_seat] = booking_ref
-    print(f"Booking updated: {current_seat} freed and {new_seat} booked with new reference {booking_ref}.")
+    
+    print(f"Booking modified: {current_seat} has been freed and {new_seat} is booked with new reference {new_booking_ref}.")
 
 #Function that displays the current booking status of all seats
 
 def show_booking_status():
-    cursor.execute("SELECT seat, booking_ref FROM bookings")
-    bookings = dict(cursor.fetchall())
-    for i in range(1, 81):  # Rows 1 to 80
-        for j, col in enumerate("ABCXDEF"):  # Columns A-F and aisle X
-            seat = f"{i}{col}"  # Seat identifier
-            formatted_seat = f" {seat}" if i < 10 else seat  # Add space for alignment
+    last_name_input = input("Enter the last name to get your booking details: ").strip().capitalize()
+    
+    # Query the database for all booking records
+    cursor.execute("SELECT seat, booking_ref, passport_no, first_name, last_name FROM bookings")
+    all_bookings_list = cursor.fetchall()
+    
+    # Filter booking details for the header based on the last name provided
+    header_bookings = [record for record in all_bookings_list if record[4].lower() == last_name_input.lower()]
+    
+    # Print header with booking details for bookings matching the last name
+    if header_bookings:
+        print(f"Booking Details for last name '{last_name_input}':")
+        for record in header_bookings:
+            seat, booking_ref, passport_no, first_name, last_name = record
+            print(f"Seat: {seat}, Booking Reference: {booking_ref}, Passenger: {first_name} {last_name}, Passport: {passport_no}")
+        print("\nSeat Booking Layout:")
+    else:
+        print(f"No bookings found for last name '{last_name_input}'.\nSeat Booking Layout:")
+    
+    # Create a dictionary mapping seat to booking reference for the full seating layout based on all booking records from the database.
+    bookings = {record[0]: record[1] for record in all_bookings_list}
+    
+    # width to ensure alignment
+    cell_width = 4
+    
+    # Print the seating layout 
+    for i in range(1, 81):  
+        row_str = ""
+        for col in "ABCXDEF":  
+            seat = f"{i}{col}"  
             if col == "X":
-                print("X", end="  ")  # Print aisle
+                cell = "X "
             elif seat in bookings:
-                print("R", end="  ")  # Print booked seats
+                cell = "R"
             elif seat in storage_seats:
-                print("S", end="  ")  # Print storage area
+                cell = "S"
             else:
-                print(formatted_seat, end="  ")  # Print available seat with spacing fix
-        print()  # New line after each row
+                cell = seat
+            row_str += f"{cell:>{cell_width}}"
+        print(row_str)
 
 # Main loop
 while True:
